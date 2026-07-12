@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from datetime import date, timedelta
 from tkinter import messagebox, ttk
 
 from studyflow.domain import ActivityState, Snapshot
@@ -27,34 +28,28 @@ class StudyFlowWindow:
         root.configure(bg="white")
         root.attributes("-topmost", True)
         root.protocol("WM_DELETE_WINDOW", self.handle_close)
+        self._build_menu()
 
-        self.toolbar = tk.Frame(root, bg="white", height=38)
-        self.toolbar.pack(fill="x", padx=8, pady=(7, 2))
-        self.pause_button = self._tool_button("暂停", service.toggle_pause)
-        self._tool_button("历史", self.show_history)
-        self._tool_button("设置", self.show_settings)
-        self._tool_button("清空", self.clear_data)
-        self._tool_button("隐藏", self.hide)
-        self._tool_button("退出", self.quit)
-
-        separator = tk.Frame(root, bg="#dddddd", height=1)
-        separator.pack(fill="x", padx=10)
         values = tk.Frame(root, bg="white")
-        values.pack(fill="both", expand=True, padx=16, pady=10)
+        values.pack(fill="both", expand=True, padx=16, pady=(14, 10))
         work = tk.Frame(values, bg="white")
         work.pack(side="left", fill="both", expand=True)
         idle = tk.Frame(values, bg="white")
         idle.pack(side="left", fill="both", expand=True)
-        tk.Label(work, text="工作时间", bg="white", fg="black",
-                 font=("Microsoft YaHei UI", 10)).pack(anchor="w")
-        self.work_value = tk.Label(work, text="00:00:00", bg="white", fg="black",
+        work_content = tk.Frame(work, bg="white")
+        work_content.pack(expand=True)
+        idle_content = tk.Frame(idle, bg="white")
+        idle_content.pack(expand=True)
+        tk.Label(work_content, text="工作时间", bg="white", fg="black",
+                 font=("Microsoft YaHei UI", 10)).pack(anchor="center")
+        self.work_value = tk.Label(work_content, text="00:00:00", bg="white", fg="black",
                                    font=("Consolas", 23, "bold"))
-        self.work_value.pack(anchor="w", pady=(2, 0))
-        tk.Label(idle, text="空闲时间", bg="white", fg="black",
-                 font=("Microsoft YaHei UI", 10)).pack(anchor="w")
-        self.idle_value = tk.Label(idle, text="00:00:00", bg="white", fg="black",
+        self.work_value.pack(anchor="center", pady=(2, 0))
+        tk.Label(idle_content, text="空闲时间", bg="white", fg="black",
+                 font=("Microsoft YaHei UI", 10)).pack(anchor="center")
+        self.idle_value = tk.Label(idle_content, text="00:00:00", bg="white", fg="black",
                                    font=("Consolas", 23, "bold"))
-        self.idle_value.pack(anchor="w", pady=(2, 0))
+        self.idle_value.pack(anchor="center", pady=(2, 0))
 
         service.on_state(self.set_state)
         service.on_snapshot(self.set_snapshot)
@@ -63,15 +58,17 @@ class StudyFlowWindow:
         self._place_bottom_right()
         self._schedule_tick()
 
-    def _tool_button(self, text: str, command) -> tk.Button:
-        button = tk.Button(
-            self.toolbar, text=text, command=command, relief="flat", bd=0,
-            bg="white", fg="black", activebackground="#eeeeee",
-            activeforeground="black", padx=8, pady=3,
-            font=("Microsoft YaHei UI", 9), cursor="hand2",
-        )
-        button.pack(side="left")
-        return button
+    def _build_menu(self) -> None:
+        self.menu_bar = tk.Menu(self.root, tearoff=False)
+        self.file_menu = tk.Menu(self.menu_bar, tearoff=False)
+        self.file_menu.add_command(label="统计", command=self.show_statistics)
+        self.file_menu.add_command(label="设置", command=self.show_settings)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="退出", command=self.quit)
+        self.menu_bar.add_cascade(label="文件", menu=self.file_menu)
+        self.menu_bar.add_command(label="重置时间", command=self.reset_time)
+        self.menu_bar.add_command(label="暂停", command=self.service.toggle_pause)
+        self.root.configure(menu=self.menu_bar)
 
     def _place_bottom_right(self) -> None:
         self.root.update_idletasks()
@@ -82,26 +79,55 @@ class StudyFlowWindow:
         self.root.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
 
     def set_state(self, state: ActivityState) -> None:
-        self.pause_button.configure(text="恢复" if state is ActivityState.PAUSED else "暂停")
+        self.menu_bar.entryconfigure(2, label="恢复" if state is ActivityState.PAUSED else "暂停")
 
     def set_snapshot(self, snapshot: Snapshot) -> None:
         self.work_value.configure(text=format_duration(snapshot.working_seconds))
         self.idle_value.configure(text=format_duration(snapshot.idle_seconds))
 
-    def show_history(self) -> None:
+    def show_statistics(self) -> None:
         dialog = tk.Toplevel(self.root)
-        dialog.title("历史记录")
-        dialog.geometry("430x360")
+        dialog.title("每日统计")
+        dialog.geometry("520x430")
         dialog.configure(bg="white")
-        history = tk.Listbox(dialog, relief="flat", bd=0, bg="white", fg="black",
-                             font=("Microsoft YaHei UI", 10))
-        history.pack(fill="both", expand=True, padx=14, pady=14)
-        for segment in reversed(self.database.segments_for_date(__import__("datetime").date.today())):
-            history.insert(
-                "end",
-                f"{segment.start_utc.astimezone():%H:%M:%S}  "
-                f"{self._state_name(segment.state):<4}  {format_duration(segment.duration_seconds)}",
-            )
+        columns = ("date", "working", "idle", "ratio")
+        table = ttk.Treeview(dialog, columns=columns, show="headings", height=16)
+        table.heading("date", text="日期")
+        table.heading("working", text="工作时间")
+        table.heading("idle", text="空闲时间")
+        table.heading("ratio", text="工作占比")
+        table.column("date", width=110, anchor="center")
+        table.column("working", width=125, anchor="center")
+        table.column("idle", width=125, anchor="center")
+        table.column("ratio", width=90, anchor="center")
+        table.pack(fill="both", expand=True, padx=14, pady=(14, 8))
+        clear_button = tk.Button(
+            dialog, text="清空记录", bg="white", fg="black", relief="solid", bd=1,
+            command=lambda: self.clear_statistics(table), padx=16, pady=5,
+        )
+        clear_button.pack(pady=(0, 12))
+        self._populate_statistics(table)
+
+    def _populate_statistics(self, table: ttk.Treeview) -> None:
+        for item in table.get_children():
+            table.delete(item)
+        goal = int(self.database.get_setting("daily_goal_seconds"))
+        for offset in range(30):
+            day = date.today() - timedelta(days=offset)
+            snapshot = self.database.snapshot(day, goal)
+            if offset == 0 or snapshot.tracked_seconds or snapshot.paused_seconds:
+                table.insert("", "end", values=(
+                    day.isoformat(), format_duration(snapshot.working_seconds),
+                    format_duration(snapshot.idle_seconds), f"{snapshot.work_ratio:.0%}",
+                ))
+
+    def clear_statistics(self, table: ttk.Treeview) -> None:
+        if messagebox.askyesno(
+            "清空统计记录", "确定永久删除全部统计记录吗？此操作无法撤销。",
+            parent=table.winfo_toplevel(),
+        ):
+            self.service.clear_and_restart()
+            self._populate_statistics(table)
 
     def show_settings(self) -> None:
         dialog = tk.Toplevel(self.root)
@@ -134,18 +160,16 @@ class StudyFlowWindow:
         tk.Button(frame, text="保存", command=save, bg="white", fg="black",
                   relief="solid", bd=1, padx=16).grid(row=3, column=1, pady=(12, 0))
 
-    @staticmethod
-    def _state_name(state: ActivityState) -> str:
-        return {
-            ActivityState.WORKING: "工作",
-            ActivityState.IDLE: "空闲",
-            ActivityState.PAUSED: "暂停",
-            ActivityState.UNTRACKED: "未记录",
-        }[state]
-
     def clear_data(self) -> None:
         if messagebox.askyesno("确认清空", "确定永久删除所有计时记录吗？", parent=self.root):
             self.service.clear_and_restart()
+
+    def reset_time(self) -> None:
+        if messagebox.askyesno(
+            "重置时间", "确定将当前工作时间和空闲时间归零并重新开始吗？\n每日统计不会被删除。",
+            parent=self.root,
+        ):
+            self.service.reset_session()
 
     def _schedule_tick(self) -> None:
         if not self._closing:

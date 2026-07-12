@@ -2,9 +2,10 @@ import logging
 import tempfile
 import tkinter as tk
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from studyflow.app import create_app
 from studyflow.domain import ActivityState, Snapshot
@@ -36,12 +37,17 @@ class TkinterGuiTests(unittest.TestCase):
         self.assertEqual(self.root.cget("bg"), "white")
         self.assertFalse(bool(self.root.resizable()[0]))
 
-    def test_toolbar_is_one_row_with_six_actions(self):
-        buttons = [child for child in self.window.toolbar.winfo_children()
-                   if isinstance(child, tk.Button)]
-        self.assertEqual([button.cget("text") for button in buttons],
-                         ["暂停", "历史", "设置", "清空", "隐藏", "退出"])
-        self.assertEqual(len({button.pack_info()["side"] for button in buttons}), 1)
+    def test_pause_is_on_the_same_top_menu_row(self):
+        self.assertEqual(self.window.menu_bar.entrycget(0, "label"), "文件")
+        self.assertEqual(self.window.menu_bar.entrycget(1, "label"), "重置时间")
+        self.assertEqual(self.window.menu_bar.entrycget(2, "label"), "暂停")
+        self.assertFalse(hasattr(self.window, "toolbar"))
+
+    def test_file_menu_contains_statistics_settings_and_exit(self):
+        labels = [self.window.file_menu.entrycget(index, "label")
+                  for index in (0, 1, 3)]
+        self.assertEqual(labels, ["统计", "设置", "退出"])
+        self.assertEqual(self.window.menu_bar.entrycget(1, "label"), "重置时间")
 
     def test_only_work_and_idle_values_are_prominent(self):
         self.window.set_snapshot(Snapshot(3661, 122, goal_seconds=14400))
@@ -49,11 +55,20 @@ class TkinterGuiTests(unittest.TestCase):
         self.assertEqual(self.window.idle_value.cget("text"), "00:02:02")
         self.assertEqual(self.window.work_value.cget("fg"), "black")
         self.assertEqual(self.window.idle_value.cget("fg"), "black")
+        self.assertEqual(self.window.work_value.pack_info()["anchor"], "center")
+        self.assertEqual(self.window.idle_value.pack_info()["anchor"], "center")
+        self.assertEqual(self.window.work_value.master.pack_info()["expand"], 1)
+        self.assertEqual(self.window.idle_value.master.pack_info()["expand"], 1)
+        separator_frames = [
+            child for child in self.root.winfo_children()
+            if isinstance(child, tk.Frame) and child.cget("height") == 1
+        ]
+        self.assertEqual(separator_frames, [])
 
     def test_pause_interaction(self):
         self.window.service.toggle_pause()
         self.assertIs(self.window.service.state, ActivityState.PAUSED)
-        self.assertEqual(self.window.pause_button.cget("text"), "恢复")
+        self.assertEqual(self.window.menu_bar.entrycget(2, "label"), "恢复")
 
     def test_clear_restarts_with_a_valid_segment(self):
         old_id = self.window.service.segment_id
@@ -82,6 +97,7 @@ class TkinterGuiTests(unittest.TestCase):
             self.window.service.tick()
         self.assertIs(self.window.service.state, ActivityState.WORKING)
         start = datetime.now(timezone.utc) - timedelta(seconds=31)
+        self.window.service.session_started_at = start
         self.window.database.connection.execute(
             "UPDATE activity_segments SET start_utc=? WHERE id=?",
             (start.isoformat(), self.window.service.segment_id),
@@ -110,6 +126,42 @@ class TkinterGuiTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["state"], "working")
         self.assertIsNone(row["end_utc"])
+
+    def test_reset_time_zeros_session_but_preserves_daily_statistics(self):
+        self.window.service.session_started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+        self.window.service.refresh()
+        daily_before = self.window.database.snapshot(date.today(), 14400).working_seconds
+        self.window.service.reset_session()
+        self.assertEqual(self.window.work_value.cget("text"), "00:00:00")
+        self.assertEqual(self.window.idle_value.cget("text"), "00:00:00")
+        daily_after = self.window.database.snapshot(date.today(), 14400).working_seconds
+        self.assertGreaterEqual(daily_after, daily_before)
+
+    @patch("studyflow.main_window.messagebox.askyesno", return_value=True)
+    def test_statistics_clear_deletes_records_and_restarts(self, _dialog):
+        table = MagicMock()
+        table.winfo_toplevel.return_value = self.root
+        with patch.object(self.window, "_populate_statistics") as populate:
+            self.window.clear_statistics(table)
+        count = self.window.database.connection.execute(
+            "SELECT COUNT(*) FROM activity_segments"
+        ).fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertIs(self.window.service.state, ActivityState.WORKING)
+        populate.assert_called_once_with(table)
+
+    @patch("studyflow.main_window.messagebox.askyesno", return_value=False)
+    def test_statistics_clear_cancel_keeps_records(self, _dialog):
+        before = self.window.database.connection.execute(
+            "SELECT COUNT(*) FROM activity_segments"
+        ).fetchone()[0]
+        table = MagicMock()
+        table.winfo_toplevel.return_value = self.root
+        self.window.clear_statistics(table)
+        after = self.window.database.connection.execute(
+            "SELECT COUNT(*) FROM activity_segments"
+        ).fetchone()[0]
+        self.assertEqual(after, before)
 
     @patch("studyflow.main_window.messagebox.askyesnocancel", return_value=False)
     def test_close_no_hides_to_system_tray(self, _dialog):

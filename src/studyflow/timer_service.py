@@ -21,6 +21,7 @@ class TimerService:
         self._snapshot_callbacks: list[Callable[[Snapshot], None]] = []
         self._segment_callbacks: list[Callable[[list], None]] = []
         self.database.recover_open_segment()
+        self.session_started_at = utc_now()
         self._begin(self._calculate_state(), "automatic")
 
     @property
@@ -74,14 +75,31 @@ class TimerService:
 
     def refresh(self) -> None:
         today = date.today()
-        snapshot = self.database.snapshot(
-            today, int(self.database.get_setting("daily_goal_seconds"))
-        )
         segments = self.database.segments_for_date(today)
+        snapshot = self._session_snapshot(
+            segments, int(self.database.get_setting("daily_goal_seconds"))
+        )
         for callback in self._snapshot_callbacks:
             callback(snapshot)
         for callback in self._segment_callbacks:
             callback(segments)
+
+    def _session_snapshot(self, segments: list, goal_seconds: int) -> Snapshot:
+        totals = {state: 0 for state in ActivityState}
+        longest = 0
+        now = utc_now()
+        for segment in segments:
+            start = max(segment.start_utc, self.session_started_at)
+            end = segment.end_utc or now
+            duration = max(0, int((end - start).total_seconds()))
+            totals[segment.state] += duration
+            if segment.state is ActivityState.WORKING:
+                longest = max(longest, duration)
+        return Snapshot(
+            totals[ActivityState.WORKING], totals[ActivityState.IDLE],
+            totals[ActivityState.PAUSED], totals[ActivityState.UNTRACKED],
+            longest, goal_seconds,
+        )
 
     def toggle_pause(self) -> None:
         self.paused = not self.paused
@@ -95,11 +113,32 @@ class TimerService:
         """Delete history and immediately start a fresh segment for the current state."""
         self.database.clear_all()
         self._checkpoint_ticks = 0
+        self.session_started_at = utc_now()
         # Clearing is an explicit user action, so the new session always starts
         # as working regardless of the state of the segment that was deleted.
         self.paused = False
         self.session_available = True
         self._begin(ActivityState.WORKING, "manual")
+        for callback in self._state_callbacks:
+            callback(self.state)
+        self.refresh()
+
+    def reset_session(self) -> None:
+        """Reset the visible session clock without deleting daily history."""
+        now = utc_now()
+        self.paused = False
+        self.session_available = True
+        if self.segment_id:
+            self.segment_id = self.database.transition(
+                self.segment_id, ActivityState.WORKING, now, "manual"
+            )
+        else:
+            self.segment_id = self.database.start_segment(
+                ActivityState.WORKING, now, "manual"
+            )
+        self.state = ActivityState.WORKING
+        self.session_started_at = now
+        self._checkpoint_ticks = 0
         for callback in self._state_callbacks:
             callback(self.state)
         self.refresh()
