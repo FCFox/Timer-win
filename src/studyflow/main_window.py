@@ -26,7 +26,7 @@ class StudyFlowWindow:
         root.resizable(False, False)
         root.configure(bg="white")
         root.attributes("-topmost", True)
-        root.protocol("WM_DELETE_WINDOW", self.hide)
+        root.protocol("WM_DELETE_WINDOW", self.handle_close)
 
         self.toolbar = tk.Frame(root, bg="white", height=38)
         self.toolbar.pack(fill="x", padx=8, pady=(7, 2))
@@ -163,6 +163,17 @@ class StudyFlowWindow:
 
     def hide(self) -> None:
         self.root.withdraw()
+
+    def handle_close(self) -> None:
+        choice = messagebox.askyesnocancel(
+            "关闭 StudyFlow",
+            "是否退出程序？\n\n选择“是”：退出并停止计时\n选择“否”：隐藏到右下角托盘并继续计时",
+            parent=self.root,
+        )
+        if choice is True:
+            self.quit()
+        elif choice is False:
+            self.hide()
 
     def show(self) -> None:
         self.root.deiconify()

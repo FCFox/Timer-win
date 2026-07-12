@@ -111,6 +111,27 @@ class TkinterGuiTests(unittest.TestCase):
         self.assertEqual(row["state"], "working")
         self.assertIsNone(row["end_utc"])
 
+    @patch("studyflow.main_window.messagebox.askyesnocancel", return_value=False)
+    def test_close_no_hides_to_system_tray(self, _dialog):
+        with patch.object(self.root, "withdraw") as withdraw:
+            self.window.handle_close()
+        withdraw.assert_called_once_with()
+        self.assertTrue(self.window.service.segment_id)
+
+    @patch("studyflow.main_window.messagebox.askyesnocancel", return_value=None)
+    def test_close_cancel_keeps_window_and_timer(self, _dialog):
+        with patch.object(self.root, "withdraw") as withdraw:
+            self.window.handle_close()
+        withdraw.assert_not_called()
+        self.assertTrue(self.window.service.segment_id)
+
+    @patch("studyflow.main_window.messagebox.askyesnocancel", return_value=True)
+    def test_close_yes_exits_and_stops_timer(self, _dialog):
+        with patch.object(self.root, "destroy") as destroy:
+            self.window.handle_close()
+        destroy.assert_called_once_with()
+        self.assertEqual(self.window.service.segment_id, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

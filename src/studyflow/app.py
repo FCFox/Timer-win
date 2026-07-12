@@ -7,6 +7,9 @@ import tkinter as tk
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+import pystray
+from PIL import Image, ImageDraw
+
 from studyflow.infrastructure import Database
 from studyflow.main_window import StudyFlowWindow
 from studyflow.timer_service import TimerService
@@ -30,16 +33,23 @@ def create_app(root: tk.Tk, path: Path | None = None) -> StudyFlowWindow:
 
 def main() -> int:
     root=tk.Tk(); window=create_app(root)
-    # pystray is optional so the stdlib-only application always remains runnable.
-    try:
-        import pystray
-        from PIL import Image, ImageDraw
-        image=Image.new("RGB",(64,64),"#6975ef"); draw=ImageDraw.Draw(image); draw.ellipse((18,18,46,46),fill="white")
-        tray=pystray.Icon("StudyFlow",image,"StudyFlow",menu=pystray.Menu(pystray.MenuItem("显示",lambda:root.after(0,window.show)),pystray.MenuItem("暂停/恢复",lambda:root.after(0,window.service.toggle_pause)),pystray.MenuItem("退出",lambda:root.after(0,window.quit))))
-        tray.run_detached()
-    except ImportError:
-        logging.info("pystray/Pillow 未安装，系统托盘功能已禁用")
+    image=Image.new("RGB",(64,64),"white")
+    draw=ImageDraw.Draw(image)
+    draw.ellipse((5,5,59,59),fill="black")
+    draw.ellipse((12,12,52,52),fill="white")
+    draw.line((32,18,32,34,43,40),fill="black",width=4)
+    show_item=pystray.MenuItem("显示",lambda:root.after(0,window.show),default=True)
+    tray=pystray.Icon(
+        "StudyFlow",image,"StudyFlow",
+        menu=pystray.Menu(
+            show_item,
+            pystray.MenuItem("暂停/恢复",lambda:root.after(0,window.service.toggle_pause)),
+            pystray.MenuItem("退出",lambda:root.after(0,window.quit)),
+        ),
+    )
+    tray.run_detached()
     try: root.mainloop()
     finally:
+        tray.stop()
         if window.service.segment_id: window.service.stop()
     return 0
