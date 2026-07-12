@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import tkinter as tk
 from datetime import date, timedelta
 from tkinter import messagebox, ttk
@@ -23,11 +24,12 @@ class StudyFlowWindow:
         self.root, self.database, self.service = root, database, service
         self._closing = False
         self._after_id: str | None = None
+        self._constraining_position = False
         root.title("StudyFlow")
         root.resizable(False, False)
         root.configure(bg="white")
-        root.attributes("-topmost", True)
         root.protocol("WM_DELETE_WINDOW", self.handle_close)
+        root.bind("<Configure>", self._on_configure, add="+")
         self._build_menu()
 
         values = tk.Frame(root, bg="white")
@@ -72,11 +74,61 @@ class StudyFlowWindow:
 
     def _place_bottom_right(self) -> None:
         self.root.update_idletasks()
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        x = max(0, screen_width - self.WIDTH - 16)
-        y = max(0, screen_height - self.HEIGHT - 56)
+        left, top, right, bottom = self._work_area()
+        outer_width, outer_height = self._outer_window_size()
+        x = max(left, right - outer_width - 8)
+        y = max(top, bottom - outer_height - 8)
         self.root.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
+
+    def _outer_window_size(self) -> tuple[int, int]:
+        """Return the full native window size, including title/menu/borders."""
+        if hasattr(ctypes, "windll"):
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long),
+                ]
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            rect = RECT()
+            if hwnd and ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                width, height = rect.right - rect.left, rect.bottom - rect.top
+                if width > 0 and height > 0:
+                    return width, height
+        border_x = max(0, self.root.winfo_rootx() - self.root.winfo_x())
+        title_height = max(0, self.root.winfo_rooty() - self.root.winfo_y())
+        return self.root.winfo_width() + border_x * 2, self.root.winfo_height() + title_height + border_x
+
+    def _work_area(self) -> tuple[int, int, int, int]:
+        """Return the Windows desktop work area, excluding the taskbar."""
+        if hasattr(ctypes, "windll"):
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long),
+                ]
+            rect = RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+                return rect.left, rect.top, rect.right, rect.bottom
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+    def _on_configure(self, _event=None) -> None:
+        if self._constraining_position or self.root.state() != "normal":
+            return
+        self._constrain_to_work_area()
+
+    def _constrain_to_work_area(self) -> None:
+        self.root.update_idletasks()
+        left, top, right, bottom = self._work_area()
+        width, height = self._outer_window_size()
+        x = min(max(self.root.winfo_x(), left), max(left, right - width))
+        y = min(max(self.root.winfo_y(), top), max(top, bottom - height))
+        if (x, y) != (self.root.winfo_x(), self.root.winfo_y()):
+            self._constraining_position = True
+            try:
+                self.root.geometry(f"+{x}+{y}")
+                self.root.update_idletasks()
+            finally:
+                self._constraining_position = False
 
     def set_state(self, state: ActivityState) -> None:
         self.menu_bar.entryconfigure(2, label="恢复" if state is ActivityState.PAUSED else "暂停")

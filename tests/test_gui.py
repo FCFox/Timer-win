@@ -36,6 +36,31 @@ class TkinterGuiTests(unittest.TestCase):
         self.assertTrue(geometry.startswith("430x150+"), geometry)
         self.assertEqual(self.root.cget("bg"), "white")
         self.assertFalse(bool(self.root.resizable()[0]))
+        self.assertFalse(bool(self.root.attributes("-topmost")))
+
+    def test_window_is_kept_inside_work_area(self):
+        self.root.deiconify()
+        with patch.object(self.window, "_work_area", return_value=(0, 0, 800, 600)):
+            self.root.geometry("430x150+700+550")
+            self.root.update_idletasks()
+            self.window._constrain_to_work_area()
+        self.assertLessEqual(self.root.winfo_x(), 370)
+        self.assertLessEqual(self.root.winfo_y(), 450)
+        self.assertGreaterEqual(self.root.winfo_x(), 0)
+        self.assertGreaterEqual(self.root.winfo_y(), 0)
+        self.root.withdraw()
+
+    def test_window_is_placed_above_taskbar_work_area(self):
+        self.root.deiconify()
+        self.root.update_idletasks()
+        with patch.object(self.window, "_work_area", return_value=(0, 0, 1920, 1040)):
+            outer_width, outer_height = self.window._outer_window_size()
+            self.window._place_bottom_right()
+            self.root.update_idletasks()
+        self.assertEqual(self.root.winfo_x(), 1920 - outer_width - 8)
+        self.assertEqual(self.root.winfo_y(), 1040 - outer_height - 8)
+        self.assertLessEqual(self.root.winfo_y() + outer_height, 1040)
+        self.root.withdraw()
 
     def test_pause_is_on_the_same_top_menu_row(self):
         self.assertEqual(self.window.menu_bar.entrycget(0, "label"), "文件")
