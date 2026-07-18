@@ -147,3 +147,8 @@ class TimerService:
         if self.segment_id:
             self.database.close_segment(self.segment_id, utc_now())
             self.segment_id = 0
+
+    def save_checkpoint(self) -> None:
+        """Persist current elapsed time without stopping the service."""
+        if self.segment_id:
+            self.database.checkpoint(self.segment_id, utc_now())

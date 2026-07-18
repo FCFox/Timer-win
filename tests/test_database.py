@@ -35,10 +35,18 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(snapshot.longest_working_seconds, 300)
 
     def test_recover_open_segment(self):
-        self.db.start_segment(ActivityState.WORKING, datetime.now(timezone.utc), "automatic")
+        start = datetime.now(timezone.utc) - timedelta(hours=3)
+        segment_id = self.db.start_segment(ActivityState.WORKING, start, "automatic")
+        self.db.connection.execute(
+            "UPDATE activity_segments SET duration_seconds=30 WHERE id=?", (segment_id,)
+        )
+        self.db.connection.commit()
         self.db.recover_open_segment()
-        row = self.db.connection.execute("SELECT end_utc FROM activity_segments").fetchone()
-        self.assertIsNotNone(row[0])
+        row = self.db.connection.execute(
+            "SELECT end_utc, duration_seconds FROM activity_segments"
+        ).fetchone()
+        self.assertEqual(datetime.fromisoformat(row[0]), start + timedelta(seconds=30))
+        self.assertEqual(row[1], 30)
 
     def test_new_launch_starts_display_at_zero_but_keeps_daily_statistics(self):
         now = datetime.now(timezone.utc)

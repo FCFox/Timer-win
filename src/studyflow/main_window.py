@@ -25,6 +25,8 @@ class StudyFlowWindow:
         self._closing = False
         self._after_id: str | None = None
         self._constraining_position = False
+        self._shutdown_hook = None
+        self._original_wndproc = None
         root.title("StudyFlow")
         root.resizable(False, False)
         root.configure(bg="white")
@@ -58,7 +60,51 @@ class StudyFlowWindow:
         self.set_state(service.state)
         service.refresh()
         self._place_bottom_right()
+        self._install_shutdown_handler()
         self._schedule_tick()
+
+    def _install_shutdown_handler(self) -> None:
+        """Listen for Windows shutdown independently of the close button."""
+        if not hasattr(ctypes, "windll"):
+            return
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(self.root.winfo_id())
+        if not hwnd:
+            return
+        wndproc_type = ctypes.WINFUNCTYPE(
+            ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint,
+            ctypes.c_size_t, ctypes.c_ssize_t,
+        )
+        user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+        user32.CallWindowProcW.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+            ctypes.c_size_t, ctypes.c_ssize_t,
+        ]
+        user32.CallWindowProcW.restype = ctypes.c_ssize_t
+
+        def wndproc(window, message, wparam, lparam):
+            result = self._handle_shutdown_message(message, wparam)
+            if result is not None:
+                return result
+            return user32.CallWindowProcW(
+                self._original_wndproc, window, message, wparam, lparam
+            )
+
+        self._shutdown_hook = wndproc_type(wndproc)
+        self._original_wndproc = user32.SetWindowLongPtrW(
+            hwnd, -4, ctypes.cast(self._shutdown_hook, ctypes.c_void_p)
+        )
+
+    def _handle_shutdown_message(self, message: int, wparam: int) -> int | None:
+        if message == 0x0011:  # WM_QUERYENDSESSION
+            self.service.save_checkpoint()
+            return 1
+        if message == 0x0016 and wparam:  # WM_ENDSESSION
+            self.stop_scheduler()
+            self.service.stop()
+            return 0
+        return None
 
     def _build_menu(self) -> None:
         self.menu_bar = tk.Menu(self.root, tearoff=False)

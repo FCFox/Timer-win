@@ -209,6 +209,16 @@ class TkinterGuiTests(unittest.TestCase):
         destroy.assert_called_once_with()
         self.assertEqual(self.window.service.segment_id, 0)
 
+    def test_windows_shutdown_saves_then_stops(self):
+        with patch.object(self.window.service, "save_checkpoint") as save:
+            result = self.window._handle_shutdown_message(0x0011, 0)
+        self.assertEqual(result, 1)
+        save.assert_called_once_with()
+        with patch.object(self.window.service, "stop") as stop:
+            result = self.window._handle_shutdown_message(0x0016, 1)
+        self.assertEqual(result, 0)
+        stop.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

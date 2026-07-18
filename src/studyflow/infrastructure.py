@@ -77,13 +77,15 @@ class Database:
         self.connection.commit()
 
     def recover_open_segment(self) -> None:
-        now = utc_now()
         row = self.connection.execute(
             "SELECT * FROM activity_segments WHERE end_utc IS NULL ORDER BY id DESC LIMIT 1"
         ).fetchone()
         if row:
             start = datetime.fromisoformat(row["start_utc"])
-            self._close(row["id"], now, max(0, int((now - start).total_seconds())))
+            # Recover only the duration that was actually persisted by the
+            # periodic checkpoint. Never infer time from the next launch.
+            duration = max(0, int(row["duration_seconds"]))
+            self._close(row["id"], start + timedelta(seconds=duration), duration)
 
     def start_segment(self, state: ActivityState, at: datetime, source: str) -> int:
         cur = self.connection.execute(
